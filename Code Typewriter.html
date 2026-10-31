@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Code Typewriter</title>
+<style>
+:root{color-scheme:dark;--bg:#04060b;--tx:#f4f4f4;--dim:#4a5365;--str:#8de08a;--kw:#ff5fa8;--fn:#6fd6ee;--cm:#7d8794;--cur:#ff1a2e;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html,body{height:100%;margin:0;background:radial-gradient(ellipse at 50% 115%,#0e0504 0%,#03050b 50%,#000 100%);color:var(--tx);overflow:hidden;font-family:"JetBrains Mono","Fira Code",ui-monospace,Menlo,Consolas,monospace}
+body::after{content:"";position:fixed;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 35%,rgba(0,0,0,.8) 100%),radial-gradient(ellipse at 70% 90%,rgba(255,120,40,.1),transparent 55%),radial-gradient(ellipse at 20% 10%,rgba(40,80,160,.14),transparent 55%)}
+#bg{position:fixed;inset:0;width:100%;height:100%;z-index:0}
+#view{position:fixed;inset:0;perspective:900px;overflow:hidden;z-index:1}
+#cam{position:absolute;inset:0;transform-style:preserve-3d;will-change:transform}
+#stack{position:absolute;left:0;top:50%;width:100%;padding:0 10vw;box-sizing:border-box;will-change:transform}
+.ln{font-weight:400;text-shadow:0 2px 10px rgba(0,0,0,.95);font-size:clamp(16px,4.8vw,32px);line-height:1.7;white-space:pre-wrap;word-break:break-word;transition:opacity 1.6s ease,filter 1.6s ease,text-shadow 1s ease;min-height:1.7em}
+.ln.act{text-shadow:0 2px 10px rgba(0,0,0,.9),0 0 22px rgba(255,60,70,.45),0 0 3px rgba(255,255,255,.35)}
+.s{color:var(--str)}.k{color:var(--kw)}.f{color:var(--fn)}.c{color:var(--cm)}
+.cur{display:inline-block;width:.55em;height:1.05em;background:var(--cur);vertical-align:-.15em;margin-left:2px;margin-right:calc(-.55em - 2px);animation:bl 1s steps(1) infinite}
+@keyframes bl{50%{opacity:0}}
+#ui{position:fixed;inset:0;display:flex;flex-direction:column;gap:14px;align-items:center;justify-content:center;background:rgba(4,6,11,.92);z-index:5;text-align:center;padding:24px}
+#ui.hide{display:none}
+button,label.b{font:inherit;background:#fff;color:#000;border:0;padding:14px 28px;border-radius:999px;font-weight:700;font-size:16px}
+label.b{background:transparent;color:var(--tx);border:1px solid var(--dim);font-weight:400;font-size:14px}
+small{color:var(--dim);max-width:30em;line-height:1.5}
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas><div id="view"><div id="cam"><div id="stack"></div></div></div>
+<div id="ui">
+  <small>Opsional: pilih lagu dari perangkatmu, lalu tekan Mulai dan rekam layar. Tap layar untuk berhenti.</small>
+  <label class="b">Pilih audio<input id="aud" type="file" accept="audio/*" hidden></label>
+  <button id="go">Mulai</button>
+</div>
+<audio id="au"></audio>
+
+<script>
+/* ============ ISI DI SINI ============
+ t     : teks satu baris
+ at    : (opsional) detik mulai mengetik, sinkron dengan lagu
+ cps   : kecepatan ketik (karakter per detik). Kosongkan = otomatis menyesuaikan jarak ke baris berikutnya
+ pause : jeda setelah baris selesai (detik), dipakai kalau tidak ada at */
+const SCRIPT = [
+  {t:'const door = await trust.open("midnight");', at:3.0},
+  {t:'flags.forEach(f => ignore(f.color));', at:10.0},
+  {t:'if (heart.isBlind()) throw new Fall();', at:16.5},
+  {t:'let ending = me.write(plot.twist);', at:21.7},
+  {t:'catch (e) { e.owner = me; }', at:26.2},
+  {t:'sky.promise(me, "tonight").then(null);', at:28.5},
+  {t:'gravity.pull(me);', at:32.3},
+  {t:'logs.push("saw it coming"); // ignored', at:34.5},
+  {t:'return regret ?? 0;', at:38.7},
+  {t:'while (me.y > floor) me.y--;', at:41.0},
+  {t:'hope.retry(3); // 404 not found', at:44.8},
+  {t:'for (;;) { memory.replay(you); }', at:47.8},
+  {t:'process.exit(0); // silence', at:53.3, cps:10},
+];
+const MAX_VISIBLE = 6;
+/* ===================================== */
+
+const cam=document.getElementById('cam'),stack=document.getElementById('stack'),ui=document.getElementById('ui'),au=document.getElementById('au');
+const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+function hl(s){
+  return esc(s).replace(/(\/\/.*$)|("[^"]*"?)|\b(const|let|var|return|function|new|if|else|while|await|for|throw|catch|of|this)\b|=&gt;|\b([A-Z]\w*)\b|\b(\d+)\b/g,
+    (m,c,str,kw,cls,num)=>c?`<span class="c">${c}</span>`:str?`<span class="s">${str}</span>`:kw?`<span class="k">${kw}</span>`:m==='=&gt;'?`<span class="k">${m}</span>`:`<span class="f">${m}</span>`);
+}
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let run=0, active=null, cur=0, first=true, pt=0, p=0, pz=1;
+
+/* kamera: gerak halus terus-menerus (gelombang sinus) + bias pelan tiap baris */
+const B={x:0,y:0,z:0,rx:0,ry:0,rz:0}, T={...B};
+function newBias(){
+  T.x=(Math.random()-.5)*24; T.y=(Math.random()-.5)*28; T.z=-30+Math.random()*30; pt=1; pz=Math.random()<.5?-1:1;
+  T.rx=(Math.random()-.5)*9; T.ry=(Math.random()-.5)*16; T.rz=(Math.random()-.5)*4;
+}
+let last=performance.now();
+function frame(now){
+  const dt=Math.min(.05,(now-last)/1000); last=now; const t=now/1000;
+  const kb=1-Math.exp(-dt*.7);
+  T.z=Math.min(T.z+dt*7,50);
+  pt*=Math.exp(-dt*1.6); p+=(pt-p)*(1-Math.exp(-dt*7));
+  for(const k in B) B[k]+=(T[k]-B[k])*kb;
+  if(active){
+    const tg=-(active.offsetTop+active.offsetHeight/2);
+    if(first){cur=tg;first=false;}
+    cur+=(tg-cur)*(1-Math.exp(-dt*3));
+    stack.style.transform=`translate3d(0,${cur}px,0)`;
+  }
+  cam.style.transform=`translate3d(${B.x+Math.sin(t*.21)*12}px,${B.y+Math.sin(t*.17)*10}px,${B.z+p*30+Math.sin(t*.13)*30}px) rotateX(${B.rx+Math.sin(t*.19)*2.5}deg) rotateY(${B.ry+Math.sin(t*.15)*4}deg) rotateZ(${B.rz+p*pz*2+Math.sin(t*.1)*1.2}deg)`;
+  drawBg(t,dt);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+/* background: orb cahaya bergerak + hujan karakter kode tipis */
+const bg=document.getElementById('bg'),g=bg.getContext('2d'),CH='01{}();=>.$#/<>[]';
+let W,H,cols,drops=[],orbs=[];
+function fit(){
+  const r=devicePixelRatio||1; W=bg.width=innerWidth*r; H=bg.height=innerHeight*r;
+  const fs=16*r; cols=Math.ceil(W/fs); drops=Array.from({length:cols},()=>Math.random()*H/fs);
+  orbs=[{x:.2,y:.25,r:.55,c:'255,70,60',s:.07,o:0},{x:.8,y:.7,r:.6,c:'60,110,255',s:.05,o:2},{x:.5,y:.95,r:.5,c:'255,150,50',s:.06,o:4}];
+}
+fit(); addEventListener('resize',fit);
+function drawBg(t,dt){
+  const r=devicePixelRatio||1, fs=16*r;
+  g.globalCompositeOperation='source-over'; g.clearRect(0,0,W,H);
+  g.globalCompositeOperation='lighter';
+  for(const o of orbs){
+    const x=(o.x+Math.sin(t*o.s+o.o)*.18)*W, y=(o.y+Math.cos(t*o.s*1.3+o.o)*.12)*H, R=o.r*Math.max(W,H);
+    const gr=g.createRadialGradient(x,y,0,x,y,R);
+    gr.addColorStop(0,`rgba(${o.c},.07)`); gr.addColorStop(1,`rgba(${o.c},0)`);
+    g.fillStyle=gr; g.fillRect(0,0,W,H);
+  }
+  g.globalCompositeOperation='source-over'; g.font=fs+'px monospace';
+  for(let i=0;i<cols;i+=2){
+    drops[i]+=dt*(2+(i%5)*.8);
+    if(drops[i]*fs>H+fs*16)drops[i]=-Math.random()*10;
+    for(let k=0;k<14;k++){
+      const y=(drops[i]-k)*fs; if(y<0)continue;
+      g.fillStyle=`rgba(130,180,255,${(.11*(1-k/14)).toFixed(3)})`;
+      g.fillText(CH[(i*7+Math.floor(drops[i])-k+99)%CH.length],i*fs,y);
+    }
+  }
+}
+
+function restyle(){
+  const els=[...stack.children], n=els.length;
+  els.forEach((el,i)=>{
+    const age=n-1-i;
+    el.style.opacity=age>=MAX_VISIBLE?0:Math.max(.06,1-age*.24);
+    el.style.filter=`blur(${Math.min(age*1.4,7)}px)`;
+    el.classList.toggle('act',age===0);
+  });
+}
+async function play(){
+  const my=++run; stack.innerHTML=''; active=null; first=true;
+  const t0=performance.now();
+  for(let i=0;i<SCRIPT.length;i++){
+    if(my!==run)return;
+    const L=SCRIPT[i], el=document.createElement('div'); el.className='ln';
+    stack.appendChild(el); active=el; restyle(); newBias();
+    if(typeof L.at==='number'){const w=L.at*1000-(performance.now()-t0); if(w>0)await sleep(w);}
+    const txt=L.t||'', nx=SCRIPT[i+1];
+    const gap=(typeof L.at==='number'&&nx&&typeof nx.at==='number')?nx.at-L.at:null;
+    const cps=L.cps||(gap?Math.max(2,txt.length/(gap*.8)):12);
+    for(let c=1;c<=txt.length;c++){
+      if(my!==run)return;
+      el.innerHTML=hl(txt.slice(0,c))+'<span class="cur"></span><span style="visibility:hidden">'+esc(txt.slice(c))+'</span>';
+      const ch=txt[c-1];
+      let d=1000/cps*(.6+Math.random()*.8);
+      if(',;'.includes(ch))d+=180; if(ch==='('||ch==='{')d+=90;
+      await sleep(d);
+    }
+    el.innerHTML=hl(txt)+(i===SCRIPT.length-1?'<span class="cur"></span>':'');
+    await sleep((L.pause??.5)*1000);
+  }
+}
+document.getElementById('aud').onchange=e=>{const f=e.target.files[0]; if(f)au.src=URL.createObjectURL(f);};
+document.getElementById('go').onclick=()=>{ui.classList.add('hide'); if(au.src){au.currentTime=0;au.play().catch(()=>{});} play();};
+document.getElementById('view').onclick=()=>{ui.classList.remove('hide'); au.pause(); run++;};
+</script>
+</body>
+</html>
